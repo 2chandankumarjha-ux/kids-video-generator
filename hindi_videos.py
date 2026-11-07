@@ -4,6 +4,11 @@ Hindi Video Generator — 4K UHD Edition with Quality Selection GUI
 import sys, os, time, math, random, json, copy, logging, subprocess, unicodedata
 import importlib.util
 from pathlib import Path
+
+# Windows consoles / redirected output can use a legacy codepage and crash on emoji
+for _s in (sys.stdout, sys.stderr):
+    try: _s.reconfigure(encoding='utf-8', errors='replace')
+    except Exception: pass
 from functools import lru_cache
 from collections import deque
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -31,7 +36,7 @@ check_deps()
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageTk, ImageFilter
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
 
 try:
     import uharfbuzz as hb
@@ -95,10 +100,19 @@ def load_config():
         try:
             with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
                 return _deep_merge(DEFAULT_CONFIG, json.load(f))
-        except Exception: pass
+        except Exception as e:
+            # Keep the user's file untouched (don't overwrite it) and fall back to defaults
+            print(f"⚠ config.json could not be read ({e}). Using defaults.", file=sys.stderr)
+            return copy.deepcopy(DEFAULT_CONFIG)
     cfg = copy.deepcopy(DEFAULT_CONFIG)
     save_config(cfg)
     return cfg
+
+def resolve_path(p):
+    """Relative paths in config.json are relative to the project folder, not the current directory."""
+    if not p: return ""
+    q = Path(p).expanduser()
+    return str(q if q.is_absolute() else BASE_DIR / q)
 
 CFG = load_config()
 
@@ -125,7 +139,7 @@ BG_COLOR = tuple(CFG['colors']['bg'])
 COLOR_LETTER = tuple(CFG['colors']['letter']) + (255,)
 COLOR_WORD = tuple(CFG['colors']['word']) + (255,)
 COLOR_SE = tuple(CFG['colors']['se']) + (255,)
-BG_IMAGE_PATH = CFG.get('background_image', '') or ""
+BG_IMAGE_PATH = resolve_path(CFG.get('background_image', ''))
 WORKERS = max(1, min(6, CFG.get('workers', 2)))
 ONLY_LETTERS = CFG.get('only_letters', [])
 RESUME = CFG.get('resume', True)
@@ -609,7 +623,7 @@ def save_slate_cache(mascot_path, info):
 
 HINDI_DATA = [
     ("अ", "अनार"), ("आ", "आम"), ("इ", "इमली"), ("ई", "ईख"), ("उ", "उल्लू"), ("ऊ", "ऊन"),
-    ("ऋ", "ऋषि"), ("ए", "एड़ी"), ("ऐ", "ऐनक"), ("ओ", "ओखली"), ("औ", "औरत"), ("अं", "अंगूर"),
+    ("ऋ", "ऋषि"), ("ए", "एड़ी"), ("ऐ", "ऐनक"), ("ओ", "ओखली"), ("औ", "औरत"), ("अं", "अंगूर"), ("अः", ""),
     ("क", "कबूतर"), ("ख", "खरगोश"), ("ग", "गमला"), ("घ", "घड़ी"),
     ("ङ", ""), ("च", "चरखा"), ("छ", "छतरी"), ("ज", "जहाज"), ("झ", "झंडा"),
     ("ञ", ""), ("ट", "टमाटर"), ("ठ", "ठठेरा"), ("ड", "डमरू"), ("ढ", "ढक्कन"),
@@ -617,7 +631,7 @@ HINDI_DATA = [
     ("प", "पतंग"), ("फ", "फल"), ("ब", "बतख"), ("भ", "भालू"), ("म", "मछली"),
     ("य", "यज्ञ"), ("र", "रथ"), ("ल", "लट्टू"), ("व", "वकील"),
     ("श", "शेर"), ("ष", "षट्कोण"), ("स", "सेब"), ("ह", "हल"),
-    ("क्ष", "क्षत्रिय"), ("त्र", "त्रिशूल"), ("ज्ञ", "ज्ञानी"), ("अः", "")
+    ("क्ष", "क्षत्रिय"), ("त्र", "त्रिशूल"), ("ज्ञ", "ज्ञानी")
 ]
 
 # ==========================================
@@ -842,14 +856,16 @@ def render_single_video(idx, letter, word, clipart_dir, mascot_img, slate_info, 
         ctx['clip_shadow'] = sh_.filter(ImageFilter.GaussianBlur(int(15 * SCALE)))
     
     clip = VideoClip(lambda t: create_frame(t, ctx), duration=DURATION)
-    
+
+    tmp_path = out_path.with_name(out_path.stem + ".part.mp4")
     clip.write_videofile(
-        str(out_path), fps=FPS, codec='libx264', audio=False,
+        str(tmp_path), fps=FPS, codec='libx264', audio=False,
         preset=PRESET, threads=4, 
         ffmpeg_params=["-threads", "4", "-crf", "22"],
         logger=None
     )
-    
+    os.replace(tmp_path, out_path)
+
     print(f"✔ [done]  {letter} {word} in {time.time()-t_start:.1f}s", flush=True)
     return str(out_path)
 
@@ -887,7 +903,7 @@ def open_folder(path):
 # 16. PATH + SLATE FLOW
 # ==========================================
 def get_paths():
-    saved_m, saved_c = CFG.get('mascot_path', ''), CFG.get('clipart_dir', '')
+    saved_m, saved_c = resolve_path(CFG.get('mascot_path', '')), resolve_path(CFG.get('clipart_dir', ''))
     if saved_m and saved_c and os.path.exists(saved_m) and os.path.exists(saved_c):
         print(f"📁 Last used:\n   Mascot: {saved_m}\n   Clipart: {saved_c}")
         if input("Use these paths? [Y/n]: ").strip().lower() != 'n': return saved_m, saved_c
@@ -904,7 +920,7 @@ def get_paths():
 def get_or_select_slate(mascot_path, mascot_img):
     cached = get_slate_cached(mascot_path)
     if cached:
-        print(f"💾 Saved slate found.")
+        print("💾 Saved slate found.")
         if input("Use saved slate? [Y/n]: ").strip().lower() != 'n': return cached
     log.info("Auto-detecting slate...")
     auto = find_slate(mascot_img, (0, 0, mascot_img.width, mascot_img.height), tol=1.0)
@@ -916,25 +932,12 @@ def get_or_select_slate(mascot_path, mascot_img):
 # 17. MAIN
 # ==========================================
 def main():
-    global W, H, FPS, SCALE, LEFT_X, CX, CY, MASCOT_RM, MASCOT_BO, GRAVITY
-
     # 1. Ask for Quality
     res, fps = quality_selection_gui()
     if not res: return 0
     
+    # 2. Sets every resolution-dependent global and clears the caches
     apply_resolution(res[0], res[1], fps)
-
-    # 2. Recalculate Globals based on Scale
-    LEFT_X = int(CFG['layout']['left_x'] * SCALE)
-    CX, CY = int(CFG['layout']['cx'] * SCALE), int(CFG['layout']['cy'] * SCALE)
-    MASCOT_RM = int(CFG['layout']['mascot_right_margin'] * SCALE)
-    MASCOT_BO = int(CFG['layout']['mascot_bottom_offset'] * SCALE)
-    GRAVITY = CFG['particles']['gravity'] * SCALE
-
-    # Clear cache to force rebuild with new resolution
-    _bg_base.cache_clear()
-    _vignette_mask.cache_clear()
-    text_card_sprite.cache_clear()
 
     print("=" * 60)
     print("🎬 HINDI VIDEO GENERATOR — 4K UHD EDITION")
@@ -973,6 +976,7 @@ def main():
     total = len(jobs)
     start = time.time()
     ok = done_count = 0
+    finished = set()
     progress(0, total, "Starting...")
 
     if WORKERS > 1 and total > 1:
@@ -981,11 +985,14 @@ def main():
                 futures = [ex.submit(worker_render, j) for j in jobs]
                 for fut in as_completed(futures):
                     idx, letter, word, err = fut.result()
+                    finished.add(idx)
                     done_count += 1
                     if err is None: ok += 1
                     progress(done_count, total, f"✔ {letter} {word}" if err is None else f"✖ {letter} {word}")
         except Exception:
+            log.exception("Process pool failed - continuing one by one")
             for j in jobs:
+                if j[0] in finished: continue   # don't re-render what already finished
                 idx, letter, word, err = worker_render(j)
                 done_count += 1
                 if err is None: ok += 1
