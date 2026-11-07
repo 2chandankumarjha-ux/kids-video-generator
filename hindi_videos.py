@@ -376,14 +376,17 @@ def star_sprite(size, color):
     out = Image.new('RGBA', (size, size), tuple(color[:3]) + (0,))
     out.putalpha(mask); return out
 
-_srng = random.Random(7)
 _STAR_COLORS = [(255, 190, 30), (255, 120, 40), (240, 70, 100), (60, 170, 220)]
 SPARKS = []
-for _i in range(12):
-    SPARKS.append(dict(angle=_i * (2*math.pi/12) + _srng.uniform(-0.2, 0.2),
-                       size=int(_srng.choice([44, 56, 70]) * SCALE),
-                       color=_srng.choice(_STAR_COLORS),
-                       delay=_srng.uniform(0, 0.15)))
+def build_sparks():
+    _srng = random.Random(7)
+    SPARKS.clear()
+    for _i in range(12):
+        SPARKS.append(dict(angle=_i * (2*math.pi/12) + _srng.uniform(-0.2, 0.2),
+                           size=int(_srng.choice([44, 56, 70]) * SCALE),
+                           color=_srng.choice(_STAR_COLORS),
+                           delay=_srng.uniform(0, 0.15)))
+build_sparks()
 
 def draw_sparkles(img, t, t0, cx, cy, radius):
     for s in SPARKS:
@@ -580,7 +583,7 @@ def quality_selection_gui():
 
     tk.Button(root, text="🚀 Start Rendering", command=on_start, bg='green', fg='white', font=("Arial", 12, "bold"), width=20).pack(pady=15)
     root.mainloop()
-    return result.get('res', (3840, 2160)), result.get('fps', 30)
+    return result.get('res'), result.get('fps', 30)
 
 # ==========================================
 # 9. CACHE & HINDI DATA
@@ -638,7 +641,8 @@ def make_3d_letter(letter, font_size, angle):
     out.alpha_composite(face, (pad, pad))
     return out.rotate(angle, expand=True, resample=Image.Resampling.BICUBIC)
 
-def make_mascot_with_letter(mascot_img, slate_info, letter, target_h=int(700 * SCALE)):
+def make_mascot_with_letter(mascot_img, slate_info, letter, target_h=None):
+    if target_h is None: target_h = int(700 * SCALE)
     cx, cy, sw, sh, theta = slate_info
     s = target_h / mascot_img.height
     m = mascot_img.resize((int(mascot_img.width * s), target_h), Image.Resampling.LANCZOS)
@@ -653,15 +657,32 @@ def make_mascot_with_letter(mascot_img, slate_info, letter, target_h=int(700 * S
 # ==========================================
 # 11. PARTICLES
 # ==========================================
-_rng = random.Random(42)
 PARTICLES = []
-for _ in range(NUM_MINI):
-    ang = _rng.uniform(math.radians(200), math.radians(340))
-    spd = _rng.uniform(500, 1000) * SCALE
-    PARTICLES.append(dict(
-        vx=math.cos(ang) * spd * 1.3, vy=math.sin(ang) * spd,
-        scale=_rng.uniform(0.55, 1.0), rot0=_rng.uniform(0, 360),
-        rotv=_rng.uniform(-300, 300), delay=_rng.uniform(0, 0.25)))
+def build_particles():
+    _rng = random.Random(42)
+    PARTICLES.clear()
+    for _ in range(NUM_MINI):
+        ang = _rng.uniform(math.radians(200), math.radians(340))
+        spd = _rng.uniform(500, 1000) * SCALE
+        PARTICLES.append(dict(
+            vx=math.cos(ang) * spd * 1.3, vy=math.sin(ang) * spd,
+            scale=_rng.uniform(0.55, 1.0), rot0=_rng.uniform(0, 360),
+            rotv=_rng.uniform(-300, 300), delay=_rng.uniform(0, 0.25)))
+build_particles()
+
+def apply_resolution(w, h, fps):
+    """Single place that sets every resolution-dependent global.
+    Called in main() AND in every worker (spawn re-imports the module)."""
+    global W, H, FPS, SCALE, LEFT_X, CX, CY, MASCOT_RM, MASCOT_BO, GRAVITY
+    W, H, FPS = w, h, fps
+    SCALE = W / 1920.0
+    LEFT_X = int(CFG['layout']['left_x'] * SCALE)
+    CX, CY = int(CFG['layout']['cx'] * SCALE), int(CFG['layout']['cy'] * SCALE)
+    MASCOT_RM = int(CFG['layout']['mascot_right_margin'] * SCALE)
+    MASCOT_BO = int(CFG['layout']['mascot_bottom_offset'] * SCALE)
+    GRAVITY = CFG['particles']['gravity'] * SCALE
+    _bg_base.cache_clear(); _vignette_mask.cache_clear(); text_card_sprite.cache_clear()
+    build_sparks(); build_particles()
 
 # ==========================================
 # 12. FRAME RENDERER
@@ -721,10 +742,7 @@ def create_frame(t, ctx):
         base = ease_out_back(p, 1.9) if p < 1 else 1.0
 
         if p > 0.5:
-            shadow = ctx['clip'].copy()
-            shadow_alpha = shadow.split()[3].point(lambda px: int(px * 0.35))
-            shadow.putalpha(shadow_alpha)
-            shadow = shadow.filter(ImageFilter.GaussianBlur(int(15 * SCALE)))
+            shadow = ctx['clip_shadow']
             paste_center(img, shadow, CX, CY + bob + int(25 * SCALE), scale_x=base * (1 + sq), scale_y=base * (1 - sq))
 
         paste_center(img, ctx['clip'], CX, CY + bob, scale_x=base * (1 + sq), scale_y=base * (1 - sq), angle=jiggle, alpha=clamp01(p * 3))
@@ -818,12 +836,16 @@ def render_single_video(idx, letter, word, clipart_dir, mascot_img, slate_info, 
         mascot=make_mascot_with_letter(mascot_img, slate_info, letter),
         has_word=bool(word)
     )
+    if big is not None:
+        sh_ = big.copy()
+        sh_.putalpha(sh_.split()[3].point(lambda px: int(px * 0.35)))
+        ctx['clip_shadow'] = sh_.filter(ImageFilter.GaussianBlur(int(15 * SCALE)))
     
     clip = VideoClip(lambda t: create_frame(t, ctx), duration=DURATION)
     
     clip.write_videofile(
         str(out_path), fps=FPS, codec='libx264', audio=False,
-        preset='ultrafast', threads=4, 
+        preset=PRESET, threads=4, 
         ffmpeg_params=["-threads", "4", "-crf", "22"],
         logger=None
     )
@@ -832,8 +854,9 @@ def render_single_video(idx, letter, word, clipart_dir, mascot_img, slate_info, 
     return str(out_path)
 
 def worker_render(job):
-    idx, letter, word, clipart_dir, mascot_path, slate_info, output_dir = job
+    idx, letter, word, clipart_dir, mascot_path, slate_info, output_dir, res, fps = job
     try:
+        apply_resolution(res[0], res[1], fps)
         if mascot_path not in _WORKER_CACHE:
             _WORKER_CACHE[mascot_path] = Image.open(mascot_path).convert('RGBA')
         render_single_video(idx, letter, word, clipart_dir, _WORKER_CACHE[mascot_path], slate_info, output_dir)
@@ -899,9 +922,7 @@ def main():
     res, fps = quality_selection_gui()
     if not res: return 0
     
-    W, H = res
-    FPS = fps
-    SCALE = W / 1920.0
+    apply_resolution(res[0], res[1], fps)
 
     # 2. Recalculate Globals based on Scale
     LEFT_X = int(CFG['layout']['left_x'] * SCALE)
@@ -944,7 +965,7 @@ def main():
     for i, letter, word, _p in found:
         out_path = output_dir / f"{i:03d}_{letter}_{word}.mp4"
         if RESUME and is_done(out_path): continue
-        jobs.append((i, letter, word, clipart_dir, mascot_path, slate_info, str(output_dir)))
+        jobs.append((i, letter, word, clipart_dir, mascot_path, slate_info, str(output_dir), (W, H), FPS))
 
     if not jobs:
         print("✅ All videos exist. Opening folder..."); open_folder(str(output_dir)); return 0
