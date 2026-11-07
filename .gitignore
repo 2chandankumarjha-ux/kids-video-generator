@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+OUTPUT_VIDEOS/
+render.log
+config.json
+slate_cache.json
+preview_mascot.png
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

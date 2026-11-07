@@ -1,0 +1,13 @@
+{
+  "output": {"width": 3840, "height": 2160, "fps": 30, "duration": 12.0, "fade_out": 0.8, "preset": "ultrafast"},
+  "timing": {"letter": 0.5, "se": 1.9, "word": 2.9, "clip": 4.5, "burst": 5.2},
+  "layout": {"left_x": 320, "cx": 935, "cy": 520, "show_big_letter_left": true, "mascot_right_margin": 40, "mascot_bottom_offset": 60},
+  "particles": {"num_mini": 28, "gravity": 1800},
+  "colors": {"bg": [218, 228, 226], "letter": [230, 60, 20], "word": [230, 60, 20], "se": [30, 30, 30]},
+  "workers": 2,
+  "resume": true,
+  "background_image": "",
+  "only_letters": [],
+  "mascot_path": "assets/mascots/mascot.png",
+  "clipart_dir": "assets/cliparts/Hindi"
+}
