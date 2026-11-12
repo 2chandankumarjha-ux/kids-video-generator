@@ -1,2 +1,1 @@
-mkdir -p assets
-unzip -o sfx_pack_clean.zip -d assets || python3 -m zipfile -e sfx_pack_clean.zip assets
+
